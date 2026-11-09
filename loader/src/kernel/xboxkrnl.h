@@ -185,11 +185,40 @@ NTSTATUS image_load_section(struct XbeSectionHeader *section);
 NTSTATUS image_unload_section(struct XbeSectionHeader *section);
 
 // Time
+// Windows 8+ has GetSystemTimePreciseAsFileTime; Windows 7 does not, and importing it directly would stop the
+// program from starting there. It is looked up at run time; without it the time is the system time at the first
+// call plus the QueryPerformanceCounter time since then (the same precision, no 15 ms clock steps).
 inline int64_t ktime_now_100ns()
 {
+    typedef VOID(WINAPI * PreciseFn)(LPFILETIME);
+    static const PreciseFn precise = (PreciseFn)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetSystemTimePreciseAsFileTime");
     FILETIME ft;
-    GetSystemTimePreciseAsFileTime(&ft);
-    return ((int64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    if (precise) {
+        precise(&ft);
+        return ((int64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    }
+    struct Anchor {
+        int64_t ft100ns;
+        int64_t qpc;
+        int64_t freq;
+        Anchor()
+        {
+            FILETIME f;
+            LARGE_INTEGER q, fr;
+            GetSystemTimeAsFileTime(&f);
+            QueryPerformanceCounter(&q);
+            QueryPerformanceFrequency(&fr);
+            ft100ns = ((int64_t)f.dwHighDateTime << 32) | f.dwLowDateTime;
+            qpc = q.QuadPart;
+            freq = fr.QuadPart;
+        }
+    };
+    static const Anchor a;
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    int64_t d = now.QuadPart - a.qpc;
+    // d * 10^7 / freq without overflowing 64 bits after a long run
+    return a.ft100ns + (d / a.freq) * 10000000 + (d % a.freq) * 10000000 / a.freq;
 }
 
 // Converts an NT timeout (negative = relative 100ns units, positive = absolute) to milliseconds.

@@ -37,10 +37,12 @@ bool kmem_init()
     g_contig_base = (uint8_t *)VirtualAlloc((void *)(uintptr_t)CONTIGUOUS_BASE, CONTIGUOUS_SIZE, MEM_RESERVE | MEM_COMMIT,
                                             PAGE_EXECUTE_READWRITE);
     if (!g_contig_base) {
-        logf("memory: could not reserve contiguous memory at 0x%08x (error %lu); using any address", CONTIGUOUS_BASE,
-             GetLastError());
-        g_contig_base = (uint8_t *)VirtualAlloc(nullptr, CONTIGUOUS_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-        if (!g_contig_base) return false;
+        // The game code converts between virtual and physical addresses with "| 0x80000000", so RAM anywhere else
+        // would crash it later. On 32-bit Windows a program only gets addresses below 2 GB unless the system
+        // runs with a 3 GB user space (bcdedit /set IncreaseUserVa 3072).
+        logf("memory: could not reserve contiguous memory at 0x%08x (error %lu): the program has no address space above 2 GB",
+             CONTIGUOUS_BASE, GetLastError());
+        return false;
     }
     g_contig_free[CONTIG_LOW_RESERVED] = CONTIGUOUS_SIZE - CONTIG_LOW_RESERVED - GPU_INSTANCE_SIZE;
     g_contig_used[CONTIGUOUS_SIZE - GPU_INSTANCE_SIZE] = GPU_INSTANCE_SIZE;
