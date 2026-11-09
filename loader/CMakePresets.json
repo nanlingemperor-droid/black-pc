@@ -14,10 +14,31 @@
       "generator": "Visual Studio 17 2022",
       "architecture": "Win32",
       "binaryDir": "${sourceDir}/build/win32-vs2022"
+    },
+    {
+      "name": "win32-win7",
+      "displayName": "Win32 for Windows 7 (VS 2022 with the v142 toolset)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "Win32",
+      "toolset": "v142",
+      "binaryDir": "${sourceDir}/build/win32-win7"
     }
   ],
   "buildPresets": [
-    { "name": "win32-release", "configurePreset": "win32", "configuration": "RelWithDebInfo" },
-    { "name": "win32-debug", "configurePreset": "win32", "configuration": "Debug" }
+    {
+      "name": "win32-release",
+      "configurePreset": "win32",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "win32-debug",
+      "configurePreset": "win32",
+      "configuration": "Debug"
+    },
+    {
+      "name": "win7-release",
+      "configurePreset": "win32-win7",
+      "configuration": "RelWithDebInfo"
+    }
   ]
 }
