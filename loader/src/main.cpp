@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <vector>
 
+#include "d3d/dcompile.h"
 #include "d3d/dispatch.h"
 #include "fe/calls.h"
 #include "fe/pages.h"
@@ -111,6 +112,18 @@ void usage()
            "  --verbose         print the whole log on the console too (default: startup, errors, exit; all in the log file)\n";
     if (g_console) fputs(kUsage, stdout);
     else if (!g_cfg.background) MessageBoxW(nullptr, widen(kUsage).c_str(), L"BLACK - command-line options", MB_OK);
+}
+
+// PCs with 3 GB of RAM or less (and the weak graphics that usually go with them): start with a small render
+// size, no anti-aliasing and the original 30 fps. black.ini and command-line flags override these.
+void apply_low_memory_defaults()
+{
+    MEMORYSTATUSEX ms = {sizeof ms};
+    if (!GlobalMemoryStatusEx(&ms) || ms.ullTotalPhys > (3ull << 30)) return;
+    g_cfg.scale = 1.0f;
+    g_cfg.aa = false;
+    g_cfg.fps = 30;
+    g_cfg.effects_native = true;
 }
 
 bool parse_args()
@@ -347,11 +360,21 @@ bool parse_args()
 
 std::string sha256_hex(const std::vector<uint8_t> &data)
 {
+    // BCryptCreateHash / HashData / FinishHash exist on Windows Vista and 7; the one-call BCryptHash is Windows 10 only.
     BCRYPT_ALG_HANDLE alg = nullptr;
     uint8_t digest[32] = {};
     if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) return "?";
-    BCryptHash(alg, nullptr, 0, (PUCHAR)data.data(), (ULONG)data.size(), digest, 32);
+    DWORD obj_len = 0, got = 0;
+    bool ok = BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&obj_len, sizeof obj_len, &got, 0) == 0 && obj_len;
+    std::vector<uint8_t> obj(ok ? obj_len : 1);
+    BCRYPT_HASH_HANDLE h = nullptr;
+    if (ok) ok = BCryptCreateHash(alg, &h, obj.data(), obj_len, nullptr, 0, 0) == 0;
+    if (ok) {
+        ok = BCryptHashData(h, (PUCHAR)data.data(), (ULONG)data.size(), 0) == 0 && BCryptFinishHash(h, digest, 32, 0) == 0;
+        BCryptDestroyHash(h);
+    }
     BCryptCloseAlgorithmProvider(alg, 0);
+    if (!ok) return "?";
     char hex[65];
     for (int i = 0; i < 32; i++) snprintf(hex + i * 2, 3, "%02x", digest[i]);
     return hex;
@@ -418,6 +441,7 @@ void startup_error(const std::string &text)
 
 int run(void *reserve, unsigned reserve_size)
 {
+    apply_low_memory_defaults();
     if (!parse_args()) {
         usage();
         return 2;
@@ -465,10 +489,23 @@ int run(void *reserve, unsigned reserve_size)
         return 1;
     }
 
+    if (!hlsl_available()) {
+        startup_error("No HLSL shader compiler found (d3dcompiler_NN.dll).\n\nOn Windows 7 install the \"DirectX End-User Runtime "
+                      "(June 2010)\" from Microsoft, or copy a 32-bit d3dcompiler_47.dll next to black.exe, then start again.");
+        return 1;
+    }
     language_resolve(); // the PAL disc's text and loading video follow the system language
     if (!g_cfg.symbols_path.empty()) symbols_load(g_cfg.symbols_path);
     if (!g_cfg.multicore) pin_to_one_cpu();
-    if (!kmem_init()) return 1;
+    if (!kmem_init()) {
+        startup_error("BLACK needs 64 MB of memory at address 0x80000000, which this Windows does not give a 32-bit program.\n\n"
+                      "On 32-bit Windows (7 and later): open a command prompt as administrator, run\n"
+                      "    bcdedit /set IncreaseUserVa 3072\n"
+                      "and restart the PC. (To undo it: bcdedit /deletevalue IncreaseUserVa)\n\n"
+                      "BLACK butuh 64 MB memori di alamat 0x80000000. Di Windows 32-bit: jalankan Command Prompt sebagai "
+                      "administrator, ketik: bcdedit /set IncreaseUserVa 3072 lalu restart PC.");
+        return 1;
+    }
     if (!xthread_init_slots()) return 1;
     g_image_mapped = true; // set before mapping: a partial copy also destroys the stub
     if (!image_map(g_xbe)) return 1;
