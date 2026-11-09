@@ -11,6 +11,7 @@
 #include "common.h"
 
 #include <windows.h>
+#include <mmsystem.h>
 #include <xaudio2.h>
 
 #include <algorithm>
@@ -25,6 +26,7 @@ constexpr uint32_t QUEUED = 6, RING = QUEUED + 1; // 60 ms ahead of the device
 
 typedef HRESULT(WINAPI *PFN_Create)(IXAudio2 **, UINT32, XAUDIO2_PROCESSOR);
 PFN_Create g_create;
+bool g_use_wave; // the waveOut fallback is in use
 IXAudio2 *g_xa;
 IXAudio2MasteringVoice *g_master;
 IXAudio2SourceVoice *g_src;
@@ -42,6 +44,61 @@ struct EngineCallback : IXAudio2EngineCallback {
     void STDMETHODCALLTYPE OnProcessingPassEnd() override {}
     void STDMETHODCALLTYPE OnCriticalError(HRESULT error) override { g_error = error; }
 } g_callback;
+
+// --- waveOut fallback (Windows 7 has no xaudio2_8/9.dll): winmm, 16-bit stereo, polled (no callback) ---
+constexpr uint32_t WAVE_BUFS = QUEUED + 3;
+HWAVEOUT g_wave;
+WAVEHDR g_whdr[WAVE_BUFS];
+int16_t g_wpcm[WAVE_BUFS][BLOCK * 2];
+uint32_t g_wnext;
+
+bool wave_open()
+{
+    WAVEFORMATEX wf = {};
+    wf.wFormatTag = WAVE_FORMAT_PCM;
+    wf.nChannels = 2;
+    wf.nSamplesPerSec = RATE;
+    wf.wBitsPerSample = 16;
+    wf.nBlockAlign = 4;
+    wf.nAvgBytesPerSec = RATE * 4;
+    if (waveOutOpen(&g_wave, WAVE_MAPPER, &wf, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
+        g_wave = nullptr;
+        return false;
+    }
+    for (uint32_t i = 0; i < WAVE_BUFS; i++) {
+        g_whdr[i] = {};
+        g_whdr[i].lpData = (LPSTR)g_wpcm[i];
+        g_whdr[i].dwBufferLength = sizeof g_wpcm[i];
+        if (waveOutPrepareHeader(g_wave, &g_whdr[i], sizeof g_whdr[i]) != MMSYSERR_NOERROR) {
+            waveOutClose(g_wave);
+            g_wave = nullptr;
+            return false;
+        }
+    }
+    g_wnext = 0;
+    return true;
+}
+
+uint32_t wave_blocks()
+{
+    uint32_t queued = 0;
+    for (uint32_t i = 0; i < WAVE_BUFS; i++)
+        if (g_whdr[i].dwFlags & WHDR_INQUEUE) queued++;
+    return queued < QUEUED ? QUEUED - queued : 0;
+}
+
+void wave_submit(const float *lr)
+{
+    WAVEHDR &h = g_whdr[g_wnext];
+    if (h.dwFlags & WHDR_INQUEUE) return; // device still holds it: drop this block
+    g_wnext = (g_wnext + 1) % WAVE_BUFS;
+    int16_t *pcm = g_wpcm[&h - g_whdr];
+    for (uint32_t i = 0; i < BLOCK * 2; i++) pcm[i] = g_cfg.background ? 0 : (int16_t)(std::max(-1.0f, std::min(1.0f, lr[i])) * 32767.0f);
+    if (waveOutWrite(g_wave, &h, sizeof h) != MMSYSERR_NOERROR) {
+        logf("[audio] waveOut write failed: no sound from now on");
+        g_wave = nullptr; // blocks_wanted follows the clock from here
+    }
+}
 
 void wav_header()
 {
@@ -122,7 +179,12 @@ bool open()
     if (!m) m = LoadLibraryW(L"xaudio2_8.dll");
     g_create = m ? (PFN_Create)GetProcAddress(m, "XAudio2Create") : nullptr;
     if (!g_create) {
-        logf("[audio] XAudio2 not available: no sound");
+        if (wave_open()) { // Windows 7
+            g_use_wave = true;
+            logf("[audio] XAudio2 not available: waveOut output, %u Hz stereo, %u ms blocks, %u queued", RATE, BLOCK * 1000 / RATE, QUEUED);
+            return true;
+        }
+        logf("[audio] XAudio2 and waveOut not available: no sound");
         return false;
     }
     CoInitializeEx(nullptr, COINIT_MULTITHREADED); // XAudio2 needs COM on the creating thread (the mixer's)
@@ -138,6 +200,7 @@ bool open()
 
 uint32_t blocks_wanted()
 {
+    if (g_use_wave) return g_wave ? wave_blocks() : clock_blocks();
     if (!g_create) return clock_blocks();
     ULONGLONG now = GetTickCount64();
     if (g_src && (g_error != S_OK || now - g_last_taken > 1000)) {
@@ -182,6 +245,10 @@ void submit(const float *lr)
         fwrite(pcm, sizeof pcm, 1, g_wav);
         g_wav_frames += BLOCK;
         if (g_wav_frames % (RATE / 2) == 0) wav_header(); // keep the header valid if the process is killed
+    }
+    if (g_use_wave) {
+        if (g_wave) wave_submit(lr);
+        return;
     }
     if (!g_src) return;
     float *b = g_ring[g_next];
