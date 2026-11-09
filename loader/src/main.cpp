@@ -34,6 +34,8 @@ const char kKnownXbeSha256[] = "df2739c372d254a90aeeccf5971d12097f22d89fbb90db02
 const char kPalXbeSha256[] = "67f35121ccf622e7a293c402219596fe6456ca4c3d27e6f8139e449264da30f0";
 constexpr int kKnownFsPatchCount = 34;
 
+int g_assume_build; // --as-ntsc (1) / --as-pal (2): treat an unrecognised default.xbe as that build (experimental)
+
 HANDLE g_exit_event;
 std::atomic<int> g_exit_code{-1};
 Xbe g_xbe;
@@ -108,6 +110,8 @@ void usage()
            "  --perf-at S:D     record performance for D seconds from S seconds after the first frame (perf\\)\n"
            "  --timer-vblank    vblank from a 59.94 Hz timer instead of the display's refresh (default: follow a ~60 Hz display)\n"
            "  --force           run an XBE other than the known NTSC-U build\n"
+           "  --as-ntsc         (experimental) treat an unrecognised default.xbe as the NTSC-U build: a patched or region-free\n"
+           "  --as-pal          dump has other bytes but often the same code addresses; wrong guess = crash\n"
            "  --buf-mb N        weapon-data buffers of N MB for modded weapon files (default 0 = the original 0.88 MB)\n"
            "  --verbose         print the whole log on the console too (default: startup, errors, exit; all in the log file)\n";
     if (g_console) fputs(kUsage, stdout);
@@ -304,6 +308,8 @@ bool parse_args()
             g_cfg.shot_start = (uint32_t)_wtoi(v.c_str());
         }
         else if (a == L"--force") g_cfg.force = true;
+        else if (a == L"--as-ntsc") g_assume_build = 1;
+        else if (a == L"--as-pal") g_assume_build = 2;
         else if (a == L"--buf-mb") {
             std::wstring v;
             if (!next(v)) return false;
@@ -477,6 +483,11 @@ int run(void *reserve, unsigned reserve_size)
     std::string hash = sha256_hex(g_xbe.data);
     bool known_build = hash == kKnownXbeSha256;
     bool pal_build = hash == kPalXbeSha256;
+    if (!known_build && !pal_build && g_assume_build) {
+        known_build = g_assume_build == 1;
+        pal_build = g_assume_build == 2;
+        logc("xbe: hash not recognised; treating it as the %s build as asked (experimental)", known_build ? "NTSC-U" : "PAL");
+    }
     bool supported_build = known_build || pal_build;
     g_cfg.known_build = known_build;
     g_cfg.pal_build = pal_build;
