@@ -5,7 +5,7 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
-      - name: Configure (VS 2022, v142 toolset: runs on Windows 7 SP1)
+      - name: Configure
         run: cmake --preset win32-win7
         working-directory: loader
       - name: Build
