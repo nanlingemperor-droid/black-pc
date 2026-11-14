@@ -2,11 +2,14 @@
 // Xbox port 0 is fed by every PC XInput controller, merged with keyboard and mouse while the game window has
 // focus: the mouse rotates the view directly (input/mouselook.cpp; a click in the window captures the mouse),
 // keys and mouse buttons are bound to the game's actions (input/bindings.cpp, PC SETTINGS > CONTROLS > KEY BINDINGS).
+// Generic USB joysticks (PS2-style adapters) are merged in too (input/joystick.cpp); cheat hotkeys: input/cheats.cpp.
 #include "audio/output.h"
 #include "d3d/dispatch.h"
 #include "d3d/draw.h"
 #include "d3d/host.h"
 #include "input/bindings.h"
+#include "input/cheats.h"
+#include "input/joystick.h"
 #include "input/mouselook.h"
 #include "input/movies.h"
 #include "xbe.h"
@@ -308,8 +311,11 @@ void read_pad(uint32_t port, XGamepad &g)
         merge_stick(g.sThumbLX, g.sThumbLY, p.sThumbLX, p.sThumbLY);
         merge_stick(g.sThumbRX, g.sThumbRY, p.sThumbRX, p.sThumbRY);
     }
+    // Generic USB joysticks / PS2-style adapters (winmm).
+    joystick::merge(g.wButtons, g.bAnalogButtons, g.sThumbLX, g.sThumbLY, g.sThumbRX, g.sThumbRY);
     apply_presses(g);
     bool focus = GetForegroundWindow() == host3d::window();
+    if (focus) cheats::poll(); // F1-F5 cheat hotkeys (addresses from black.ini [cheats])
     bool live = focus && host3d::mouse_captured();
     int raw_wheel;
     int wheel = mouse_look(live, &raw_wheel);
