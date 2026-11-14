@@ -39,6 +39,8 @@ add_library(blackrt SHARED
   src/input/lean.cpp
   src/input/bindings.cpp
   src/input/movies.cpp
+  src/input/joystick.cpp
+  src/input/cheats.cpp
   src/audio/reverb.cpp
   src/settings.cpp
   src/language.cpp
