@@ -55,7 +55,7 @@ void merge(uint16_t &wButtons, uint8_t analog[8], int16_t &lx, int16_t &ly, int1
         if (b(SEL)) wButtons |= 0x20; // BACK
         if (b(L3)) wButtons |= 0x40;
         if (b(R3)) wButtons |= 0x80;
-        if (j.dwPOV != JOY_POVCENTER && j.dwPOV <= 36000) { // hat: hundredths of a degree, 0 = up
+        if ((j.dwPOV & 0xFFFF) != 0xFFFF && j.dwPOV < 36000) { // hat: hundredths of a degree, 0 = up; 0xFFFF = centred
             int d = (int)(j.dwPOV / 100);
             if (d >= 315 || d <= 45) wButtons |= 0x01;
             if (d >= 45 && d <= 135) wButtons |= 0x08;
